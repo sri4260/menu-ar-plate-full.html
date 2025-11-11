@@ -3,399 +3,186 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>Menu Barcode → AR Plate (Updated)</title>
-
-<!-- A-Frame + AR.js (marker-based) -->
-<script src="https://unpkg.com/aframe@1.4.2/dist/aframe.min.js"></script>
-<script src="https://unpkg.com/ar.js@3.3.2/aframe/build/aframe-ar.js"></script>
-
-<!-- ZXing fallback for barcode scanning (broad format support) -->
-<script src="https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js"></script>
+<title>Markerless AR Menu - Place Food on Table</title>
 
 <style>
-  body,html{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
-  header{background:#0b74de;color:#fff;padding:10px;display:flex;align-items:center;justify-content:space-between}
-  header h1{font-size:16px;margin:0}
-  main{padding:12px}
-  #scannerContainer{position:relative;background:#000;border-radius:8px;overflow:hidden}
-  video#scannerVideo{width:100%;height:320px;object-fit:cover}
-  #scanStatus{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.55);color:#fff;padding:6px;border-radius:6px;font-size:13px}
-  #menuPanel{display:none;margin-top:12px}
-  .itemCard{display:inline-block;width:160px;border:1px solid #ddd;padding:8px;border-radius:8px;margin:6px;vertical-align:top;cursor:pointer}
-  .itemCard img{width:100%;height:90px;object-fit:cover;border-radius:6px}
-  .controls{margin-top:12px;display:flex;gap:8px;align-items:center}
-  button{background:#0b74de;color:#fff;border:none;padding:8px 10px;border-radius:6px;cursor:pointer}
-  input{padding:8px;border-radius:6px;border:1px solid #ccc}
-  #arContainer{display:none;position:fixed;inset:0;background:#000;z-index:9999}
-  #closeAR{position:absolute;right:12px;top:12px;z-index:10000}
-  footer{padding:8px;text-align:center;color:#666;font-size:13px}
+  body,html { margin:0; padding:0; height:100%; font-family:system-ui,Arial; overflow:hidden; }
+  #ui {
+    position:fixed;
+    top:10px;
+    left:10px;
+    background:rgba(255,255,255,0.95);
+    border-radius:10px;
+    padding:12px;
+    z-index:999;
+    width:260px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.2);
+  }
+  h2 { margin:0 0 8px 0; font-size:18px; color:#0b74de; }
+  .itemCard {
+    border:1px solid #ddd; border-radius:8px;
+    padding:6px; margin-bottom:8px;
+    cursor:pointer;
+  }
+  .itemCard img { width:100%; height:90px; object-fit:cover; border-radius:6px; }
+  .itemCard:hover { background:#f0f6ff; }
+  button {
+    padding:8px 10px; background:#0b74de; color:#fff; border:none; border-radius:6px;
+    cursor:pointer; width:100%; margin-top:5px;
+  }
+  #message { font-size:13px; color:#333; margin-top:6px; }
+  canvas { width:100%; height:100%; display:block; }
 </style>
 </head>
 <body>
-  <header>
-    <h1>Menu Scan → AR Plate</h1>
-    <div style="font-size:13px">Scan menu barcode → select item → show on plate</div>
-  </header>
-
-  <main>
-    <div id="scannerContainer">
-      <video id="scannerVideo" autoplay playsinline muted></video>
-      <div id="scanStatus">Initializing camera...</div>
-    </div>
-
-    <div class="controls">
-      <input id="manualCode" placeholder="Or enter menu code (e.g. MENU123)" />
-      <button id="manualOpen">Open Menu</button>
-      <button id="restartScan">Restart Scanner</button>
-    </div>
-
-    <div id="menuPanel">
-      <h3>Menu — tap an item to preview</h3>
-      <div id="itemsList"></div>
-    </div>
-
-    <div id="status" style="margin-top:10px;font-size:13px;color:#333">Status: waiting for menu barcode.</div>
-  </main>
-
-  <!-- AR container (A-Frame / AR.js) -->
-  <div id="arContainer">
-    <button id="closeAR">Close AR</button>
-
-    <a-scene
-      embedded
-      vr-mode-ui="enabled: false"
-      renderer="logarithmicDepthBuffer: true;antialias: true;"
-      arjs="sourceType: webcam; debugUIEnabled: true;"
-      style="width:100%; height:100vh; background: transparent;"
-    >
-      <!-- marker: using your custom barcode marker value=1 -->
-      <a-marker type="barcode" value="1" id="marker">
-        <!-- plane lies flat on plate; width/height adjusted in JS for size scaling -->
-        <a-plane id="productPlane"
-                 position="0 0 0"
-                 rotation="-90 0 0"
-                 width="0.9"
-                 height="0.9"
-                 material="side:double; src: #productTexture;"
-                 transparent="false">
-        </a-plane>
-      </a-marker>
-
-      <a-entity camera></a-entity>
-
-      <a-assets>
-        <img id="productTexture" src="" crossorigin="anonymous" />
-      </a-assets>
-    </a-scene>
+  <div id="ui">
+    <h2>🍕 AR Food Menu</h2>
+    <div id="menuList"></div>
+    <div id="message">Status: waiting...</div>
   </div>
 
+  <!-- three.js + ARButton for WebXR -->
+  <script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.152.2/examples/jsm/webxr/ARButton.js"></script>
+
 <script>
-/* -------------------------
-   CONFIG: your menu data
-   Replace or load from server (menu.json) in production.
-   Each item: code (id), name, price, img (public HTTPS URL)
-   ------------------------- */
-window.MENU_DATABASE = {
-  "MENU123": [
-    { id: "PIZZA01", name: "Margherita Pizza", price: "₹299", img: "https://ooni.com/cdn/shop/articles/20220211142347-margherita-9920_ba86be55-674e-4f35-8094-2067ab41a671.jpg?v=1737104576&width=1080" },
-    { id: "BURGER01", name: "Veg Burger", price: "₹149", img: "https://i.imgur.com/7kQEs5G.jpg" },
-    { id: "PANEER01", name: "Paneer Butter Masala", price: "₹229", img: "https://i.imgur.com/Xn0yqKw.jpg" }
-  ]
-};
+(async function(){
 
-/* -------------------------
-   Elements
-   ------------------------- */
-const video = document.getElementById('scannerVideo');
-const scanStatus = document.getElementById('scanStatus');
-const status = document.getElementById('status');
-const menuPanel = document.getElementById('menuPanel');
-const itemsList = document.getElementById('itemsList');
-const manualInput = document.getElementById('manualCode');
-const manualOpenBtn = document.getElementById('manualOpen');
-const restartScanBtn = document.getElementById('restartScan');
+// -------------------- MENU DATA --------------------
+const MENU = [
+  { id: "PIZZA01", name: "Margherita Pizza", price: "₹299", img: "https://i.imgur.com/8z7XxJd.jpg" },
+  { id: "BURGER01", name: "Veg Burger", price: "₹149", img: "https://i.imgur.com/7kQEs5G.jpg" },
+  { id: "PANEER01", name: "Paneer Butter Masala", price: "₹229", img: "https://i.imgur.com/Xn0yqKw.jpg" },
+];
+let selectedItem = MENU[0];
 
-const arContainer = document.getElementById('arContainer');
-const closeAR = document.getElementById('closeAR');
-const productTexture = document.getElementById('productTexture');
-const productPlane = document.getElementById('productPlane');
+// -------------------- UI SETUP --------------------
+const menuList = document.getElementById("menuList");
+const message = document.getElementById("message");
 
-let stream = null;
-let isScanning = false;
-let lastDetected = null;
-let activeMenuKey = null;
-
-/* -------------------------
-   Start video stream for scanning
-   ------------------------- */
-async function startScanner(){
-  stopScanner();
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false
-    });
-    video.srcObject = stream;
-    isScanning = true;
-    scanStatus.textContent = 'Scanning for menu barcode...';
-    status.textContent = 'Point the camera at the printed menu barcode.';
-    // start detection loop
-    detectLoop();
-  } catch (e) {
-    console.error('Camera error', e);
-    scanStatus.textContent = 'Camera error: ' + (e.message || e);
-    status.textContent = 'Allow camera or test on HTTPS/localhost.';
-  }
-}
-
-function stopScanner(){
-  isScanning = false;
-  if(stream){
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-  }
-}
-
-/* -------------------------
-   Barcode detection
-   Uses BarcodeDetector if available; otherwise ZXing fallback.
-   ------------------------- */
-
-async function detectLoop(){
-  // prefer BarcodeDetector API
-  if('BarcodeDetector' in window){
-    // formats: include QR and usual barcodes
-    let formats = ['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39'];
-    let detector;
-    try {
-      detector = new BarcodeDetector({formats});
-    } catch(err){
-      console.warn('BarcodeDetector init err', err);
-      detector = null;
-    }
-    if(detector){
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      while(isScanning){
-        if(video.readyState < 2){ await new Promise(r=>setTimeout(r,200)); continue; }
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        try {
-          const results = await detector.detect(canvas);
-          if(results && results.length){
-            const code = results[0].rawValue;
-            handleDetectedCode(code);
-            break;
-          }
-        } catch(e) {
-          // if detect with imageData fails, fallback later
-          console.warn('BarcodeDetector detect error', e);
-        }
-        await new Promise(r=>setTimeout(r,300));
-      }
-      return;
-    }
-  }
-
-  // ZXing fallback: use camera frames and decode
-  const codeReader = new ZXing.BrowserMultiFormatReader();
-  try{
-    await codeReader.decodeFromVideoDevice(null, video, (result, err) => {
-      if(result){
-        handleDetectedCode(result.getText());
-        codeReader.reset(); // stop
-      } else {
-        // optional: show err message while continuing
-      }
-    });
-  } catch(e){
-    console.warn('ZXing start error', e);
-    scanStatus.textContent = 'Scanner unavailable. Try manual code.';
-  }
-}
-
-/* -------------------------
-   When a barcode/menu-code is found
-   ------------------------- */
-function handleDetectedCode(code){
-  if(!code) return;
-  if(lastDetected === code) return;
-  lastDetected = code;
-  code = code.trim();
-  scanStatus.textContent = 'Detected: ' + code;
-  status.textContent = 'Detected menu code: ' + code;
-  if(window.MENU_DATABASE && window.MENU_DATABASE[code]){
-    openMenu(code);
-  } else {
-    status.textContent = `Scanned code "${code}" — no menu found. Use manual code.`;
-    menuPanel.style.display = 'none';
-  }
-  stopScanner();
-}
-
-/* -------------------------
-   Render menu items for a menu key
-   ------------------------- */
-function openMenu(menuKey){
-  activeMenuKey = menuKey;
-  const items = window.MENU_DATABASE[menuKey] || [];
-  itemsList.innerHTML = '';
-  for(const it of items){
-    const card = document.createElement('div');
-    card.className = 'itemCard';
-    card.innerHTML = `
-      <img src="${it.img}" alt="${it.name}" crossorigin="anonymous" />
-      <div style="margin-top:6px"><strong>${it.name}</strong></div>
-      <div style="font-size:13px;color:#444">${it.price}</div>
-      <div style="font-size:12px;color:#666;margin-top:6px">ID: ${it.id}</div>
-      <div style="margin-top:8px">
-        <button data-id="${it.id}" class="previewBtn">Show on plate</button>
-      </div>
+function renderMenu(){
+  menuList.innerHTML = "";
+  MENU.forEach(item=>{
+    const div = document.createElement("div");
+    div.className = "itemCard";
+    div.innerHTML = `
+      <img src="${item.img}" alt="${item.name}">
+      <div><strong>${item.name}</strong><br>${item.price}</div>
+      <button>Select</button>
     `;
-    itemsList.appendChild(card);
-  }
-  menuPanel.style.display = 'block';
-  status.textContent = `Menu opened for ${menuKey}. Tap "Show on plate" for an item.`;
-  document.querySelectorAll('.previewBtn').forEach(b=>{
-    b.addEventListener('click', (ev)=>{
-      const id = ev.currentTarget.getAttribute('data-id');
-      const item = (window.MENU_DATABASE[activeMenuKey] || []).find(x=>x.id===id);
-      if(item) openARForItem(item);
+    div.querySelector("button").addEventListener("click",()=>{
+      selectedItem = item;
+      message.textContent = `Selected: ${item.name}`;
     });
+    menuList.appendChild(div);
   });
+
+  const startBtn = document.createElement("button");
+  startBtn.textContent = "Enter AR Mode";
+  startBtn.addEventListener("click",()=>initAR());
+  menuList.appendChild(startBtn);
 }
+renderMenu();
 
-/* -------------------------
-   Open AR view with chosen item mapped to plane texture
-   ------------------------- */
-function openARForItem(item){
-  // status box
-  const dbg = document.getElementById('status') || (function(){
-    const s = document.createElement('div'); s.id='status';
-    s.style.position='fixed'; s.style.left='8px'; s.style.top='8px';
-    s.style.zIndex=99999; s.style.background='rgba(255,255,255,0.95)';
-    s.style.padding='6px 10px'; s.style.borderRadius='6px'; s.style.fontSize='14px';
-    document.body.appendChild(s); return s;
-  })();
+// -------------------- WEBXR / THREE.JS AR SETUP --------------------
+let scene, camera, renderer, reticle, hitTestSource=null, xrRefSpace=null;
+const placed = [];
 
-  if(!item || !item.img){ dbg.textContent = 'ERROR: item or image missing'; return; }
-  dbg.textContent = 'Preloading image for AR...';
-
-  // preload image to catch CORS / network errors
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = async () => {
-    dbg.textContent = 'Image loaded OK. Stopping scanner and starting AR...';
-
-    try {
-      // stop any existing scanner stream fully (avoid camera conflict)
-      try { stopScanner(); } catch(e){ console.warn('stopScanner error', e); }
-
-      // small delay to allow tracks to fully stop
-      await new Promise(r => setTimeout(r, 250));
-
-      // set the A-Frame asset src
-      const productTexture = document.getElementById('productTexture');
-      if(!productTexture) { dbg.textContent = 'ERROR: productTexture asset missing'; return; }
-      productTexture.setAttribute('src', item.img);
-
-      // adjust plane size by image aspect
-      const baseWidth = 0.9;
-      const aspect = img.width / img.height || 1;
-      const w = baseWidth;
-      const h = baseWidth / aspect;
-      const productPlane = document.getElementById('productPlane');
-      if(productPlane){
-        productPlane.setAttribute('width', w);
-        productPlane.setAttribute('height', h);
-      }
-
-      // show AR container (A-Frame/AR.js will start its camera)
-      const arContainer = document.getElementById('arContainer');
-      arContainer.style.display = 'block';
-
-      dbg.textContent = 'AR started — point camera at printed marker. If screen is black, check AR.js debug overlay.';
-    } catch(err){
-      dbg.textContent = 'ERROR while starting AR: ' + (err && err.message ? err.message : err);
-      console.error(err);
-    }
-  };
-
-  img.onerror = (e) => {
-    dbg.textContent = 'ERROR loading image (CORS or unreachable): ' + item.img;
-    console.error('Image load error', e);
-  };
-
-  img.src = item.img;
-
-  // also capture any global JS errors
-  window.addEventListener('error', function(ev){
-    const d = document.getElementById('status');
-    if(d) d.textContent = 'JS ERROR: ' + ev.message + ' at ' + ev.filename + ':' + ev.lineno;
-  });
-}
-
-
-/* -------------------------
-   UI: manual open and restart
-   ------------------------- */
-manualOpenBtn.addEventListener('click', ()=>{
-  const v = manualInput.value.trim();
-  if(!v) { alert('Enter menu code (e.g. MENU123)'); return; }
-  if(window.MENU_DATABASE[v]) openMenu(v);
-  else alert('Menu code not found in database.');
-});
-
-restartScanBtn.addEventListener('click', ()=>{
-  lastDetected = null;
-  startScanner();
-});
-
-/* -------------------------
-   AR close: reload page to stop A-Frame camera
-   ------------------------- */
-closeAR.addEventListener('click', ()=>{
-  arContainer.style.display = 'none';
-  setTimeout(()=> location.reload(), 250);
-});
-
-/* -------------------------
-   Auto-open menu from URL param ?menu=MENUKEY
-   ------------------------- */
-(function autoOpenMenuFromUrl(){
-  try {
-    const params = new URLSearchParams(location.search);
-    const menuKey = params.get('menu'); // e.g. ?menu=MENU123
-    if(menuKey && window.MENU_DATABASE && window.MENU_DATABASE[menuKey]) {
-      // stop scanner if running, then open the menu
-      if(typeof lastDetected !== 'undefined') lastDetected = menuKey;
-      try { stopScanner(); } catch(e) {}
-      openMenu(menuKey);
-      console.log('Auto-opened menu:', menuKey);
-    }
-  } catch(e) { console.warn('autoOpenMenuFromUrl err', e); }
-})();
-
-/* -------------------------
-   Start scanning automatically if secure context
-   ------------------------- */
-(function init(){
-  if(location.protocol !== 'https:' && location.hostname !== 'localhost') {
-    scanStatus.textContent = 'Camera requires HTTPS or localhost. Use manual code or host on HTTPS.';
-    status.textContent = 'Serve this page over HTTPS (or open on localhost) to enable camera scanning.';
-  } else {
-    startScanner();
+async function initAR(){
+  if(!navigator.xr){
+    message.textContent = "WebXR not supported in this browser. Use Chrome on Android.";
+    return;
   }
+
+  const supported = await navigator.xr.isSessionSupported("immersive-ar");
+  if(!supported){
+    message.textContent = "AR not supported on this device.";
+    return;
+  }
+
+  message.textContent = "Starting AR... please wait.";
+
+  // setup renderer
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera();
+  renderer = new THREE.WebGLRenderer({ alpha:true, antialias:true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  renderer.setPixelRatio(window.devicePixelRatio);
+  document.body.appendChild(renderer.domElement);
+
+  // create ring reticle
+  reticle = new THREE.Mesh(
+    new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({ color:0x00ffff, opacity:0.8, transparent:true })
+  );
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
+  // request AR session
+  const session = await navigator.xr.requestSession("immersive-ar", {
+    requiredFeatures: ["hit-test","dom-overlay"],
+    domOverlay: { root: document.body }
+  });
+  session.addEventListener("end", ()=>{ message.textContent="AR session ended."; });
+  renderer.xr.setSession(session);
+
+  xrRefSpace = await session.requestReferenceSpace("local");
+  const viewerSpace = await session.requestReferenceSpace("viewer");
+  hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+  // handle tap event
+  renderer.domElement.addEventListener("click",()=>onTap());
+
+  // AR render loop
+  renderer.setAnimationLoop((time, frame)=>{
+    if(frame){
+      const hitResults = frame.getHitTestResults(hitTestSource);
+      if(hitResults.length>0){
+        const pose = hitResults[0].getPose(xrRefSpace);
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+      } else {
+        reticle.visible = false;
+      }
+    }
+    renderer.render(scene, camera);
+  });
+
+  message.textContent = "AR started! Move phone to detect table, tap to place food.";
+}
+
+// -------------------- PLACE FOOD IMAGE --------------------
+async function onTap(){
+  if(!reticle.visible){
+    message.textContent = "No surface detected. Move phone slowly.";
+    return;
+  }
+
+  try {
+    const tex = await new THREE.TextureLoader().loadAsync(selectedItem.img);
+    const aspect = tex.image.width / tex.image.height;
+    const width = 0.2; // 20cm wide
+    const height = width / aspect;
+
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+
+    mesh.applyMatrix4(reticle.matrix);
+    mesh.rotateX(-Math.PI/2); // make it flat
+    scene.add(mesh);
+    placed.push(mesh);
+
+    message.textContent = `Placed: ${selectedItem.name}. Tap again to add more.`;
+  } catch(err){
+    console.error(err);
+    message.textContent = "Failed to load image.";
+  }
+}
+
 })();
 </script>
-
-<footer>
-  Tips: Serve on HTTPS or localhost. Print a barcode marker and place it beneath the plate.
-  To generate barcode markers (for AR.js): use a marker generator and pick "barcode" / value 1.
-</footer>
 </body>
 </html>
-
-
-
