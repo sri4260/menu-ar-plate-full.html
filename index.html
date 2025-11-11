@@ -65,7 +65,7 @@
       embedded
       vr-mode-ui="enabled: false"
       renderer="logarithmicDepthBuffer: true;antialias: true;"
-      arjs="sourceType: webcam; debugUIEnabled: false;"
+      arjs="sourceType: webcam; debugUIEnabled: true;"
       style="width:100%; height:100vh; background: transparent;"
     >
       <!-- marker: using your custom barcode marker value=1 -->
@@ -270,55 +270,69 @@ function openMenu(menuKey){
    Open AR view with chosen item mapped to plane texture
    ------------------------- */
 function openARForItem(item){
+  // status box
   const dbg = document.getElementById('status') || (function(){
-    const s = document.createElement('div'); s.id='status'; s.style.padding='10px'; s.style.background='#fff'; s.style.zIndex=9999; document.body.prepend(s); return s;
+    const s = document.createElement('div'); s.id='status';
+    s.style.position='fixed'; s.style.left='8px'; s.style.top='8px';
+    s.style.zIndex=99999; s.style.background='rgba(255,255,255,0.95)';
+    s.style.padding='6px 10px'; s.style.borderRadius='6px'; s.style.fontSize='14px';
+    document.body.appendChild(s); return s;
   })();
 
-  if(!item || !item.img) {
-    dbg.textContent = 'ERROR: Item or image missing.';
-    return;
-  }
+  if(!item || !item.img){ dbg.textContent = 'ERROR: item or image missing'; return; }
+  dbg.textContent = 'Preloading image for AR...';
 
-  dbg.textContent = 'Loading image for AR: ' + item.img;
-
-  // preload image to detect errors / CORS
+  // preload image to catch CORS / network errors
   const img = new Image();
   img.crossOrigin = 'anonymous';
-  img.onload = () => {
-    dbg.textContent = 'Image loaded OK. Opening AR...';
+  img.onload = async () => {
+    dbg.textContent = 'Image loaded OK. Stopping scanner and starting AR...';
+
     try {
-      // set a-frame asset
+      // stop any existing scanner stream fully (avoid camera conflict)
+      try { stopScanner(); } catch(e){ console.warn('stopScanner error', e); }
+
+      // small delay to allow tracks to fully stop
+      await new Promise(r => setTimeout(r, 250));
+
+      // set the A-Frame asset src
       const productTexture = document.getElementById('productTexture');
+      if(!productTexture) { dbg.textContent = 'ERROR: productTexture asset missing'; return; }
       productTexture.setAttribute('src', item.img);
 
-      // adjust plane by aspect ratio
+      // adjust plane size by image aspect
       const baseWidth = 0.9;
-      const aspect = img.width / img.height;
+      const aspect = img.width / img.height || 1;
       const w = baseWidth;
       const h = baseWidth / aspect;
       const productPlane = document.getElementById('productPlane');
-      productPlane.setAttribute('width', w);
-      productPlane.setAttribute('height', h);
+      if(productPlane){
+        productPlane.setAttribute('width', w);
+        productPlane.setAttribute('height', h);
+      }
 
-      // show AR container (A-Frame will start camera)
+      // show AR container (A-Frame/AR.js will start its camera)
       const arContainer = document.getElementById('arContainer');
       arContainer.style.display = 'block';
-      dbg.textContent = 'AR shown — point camera to your printed marker.';
 
+      dbg.textContent = 'AR started — point camera at printed marker. If screen is black, check AR.js debug overlay.';
     } catch(err){
       dbg.textContent = 'ERROR while starting AR: ' + (err && err.message ? err.message : err);
+      console.error(err);
     }
   };
 
   img.onerror = (e) => {
-    dbg.textContent = 'ERROR loading image. Possible causes: image blocked or not HTTPS/CORS. URL: ' + item.img;
+    dbg.textContent = 'ERROR loading image (CORS or unreachable): ' + item.img;
+    console.error('Image load error', e);
   };
 
   img.src = item.img;
 
-  // capture any JS errors too
+  // also capture any global JS errors
   window.addEventListener('error', function(ev){
-    dbg.textContent = 'JS ERROR: ' + ev.message + ' at ' + ev.filename + ':' + ev.lineno;
+    const d = document.getElementById('status');
+    if(d) d.textContent = 'JS ERROR: ' + ev.message + ' at ' + ev.filename + ':' + ev.lineno;
   });
 }
 
@@ -382,5 +396,6 @@ closeAR.addEventListener('click', ()=>{
 </footer>
 </body>
 </html>
+
 
 
