@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Menu Barcode → AR Plate (Full Setup)</title>
+
+<!-- A-Frame + AR.js (marker-based) -->
+<script src="https://unpkg.com/aframe@1.4.2/dist/aframe.min.js"></script>
+<script src="https://unpkg.com/ar.js@3.3.2/aframe/build/aframe-ar.js"></script>
+
+<!-- ZXing fallback for barcode scanning (broad format support) -->
+<script src="https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js"></script>
+
+<style>
+  body,html{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+  header{background:#0b74de;color:#fff;padding:10px;display:flex;align-items:center;justify-content:space-between}
+  header h1{font-size:16px;margin:0}
+  main{padding:12px}
+  #scannerContainer{position:relative;background:#000;border-radius:8px;overflow:hidden}
+  video#scannerVideo{width:100%;height:320px;object-fit:cover}
+  #scanStatus{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.55);color:#fff;padding:6px;border-radius:6px;font-size:13px}
+  #menuPanel{display:none;margin-top:12px}
+  .itemCard{display:inline-block;width:160px;border:1px solid #ddd;padding:8px;border-radius:8px;margin:6px;vertical-align:top;cursor:pointer}
+  .itemCard img{width:100%;height:90px;object-fit:cover;border-radius:6px}
+  .controls{margin-top:12px;display:flex;gap:8px;align-items:center}
+  button{background:#0b74de;color:#fff;border:none;padding:8px 10px;border-radius:6px;cursor:pointer}
+  input{padding:8px;border-radius:6px;border:1px solid #ccc}
+  #arContainer{display:none;position:fixed;inset:0;background:#000;z-index:9999}
+  #closeAR{position:absolute;right:12px;top:12px;z-index:10000}
+  footer{padding:8px;text-align:center;color:#666;font-size:13px}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Menu Scan → AR Plate</h1>
+    <div style="font-size:13px">Scan menu barcode → select item → show on plate</div>
+  </header>
+
+  <main>
+    <div id="scannerContainer">
+      <video id="scannerVideo" autoplay playsinline muted></video>
+      <div id="scanStatus">Initializing camera...</div>
+    </div>
+
+    <div class="controls">
+      <input id="manualCode" placeholder="Or enter menu code (e.g. MENU123)" />
+      <button id="manualOpen">Open Menu</button>
+      <button id="restartScan">Restart Scanner</button>
+    </div>
+
+    <div id="menuPanel">
+      <h3>Menu — tap an item to preview</h3>
+      <div id="itemsList"></div>
+    </div>
+
+    <div id="status" style="margin-top:10px;font-size:13px;color:#333">Status: waiting for menu barcode.</div>
+  </main>
+
+  <!-- AR container (A-Frame / AR.js) -->
+  <div id="arContainer">
+    <button id="closeAR">Close AR</button>
+
+    <a-scene
+      embedded
+      vr-mode-ui="enabled: false"
+      renderer="logarithmicDepthBuffer: true;antialias: true;"
+      arjs="sourceType: webcam; debugUIEnabled: false;"
+      style="width:100%; height:100vh; background: transparent;"
+    >
+      <!-- marker (hiro preset). Put marker under or near plate -->
+      <a-marker preset="hiro" id="marker">
+        <!-- plane lies flat on plate; width/height adjusted in JS for size scaling -->
+        <a-plane id="productPlane"
+                 position="0 0 0"
+                 rotation="-90 0 0"
+                 width="0.9"
+                 height="0.9"
+                 material="side:double; src: #productTexture;"
+                 transparent="false">
+        </a-plane>
+      </a-marker>
+
+      <a-entity camera></a-entity>
+
+      <a-assets>
+        <!-- will set product image src here dynamically -->
+        <img id="productTexture" src="" crossorigin="anonymous" />
+      </a-assets>
+    </a-scene>
+  </div>
+
+<script>
+/* -------------------------
+   CONFIG: your menu data
+   Replace or load from server (menu.json) in production.
+   Each item: code (id), name, price, img (public HTTPS URL)
+   ------------------------- */
+const MENU_DATABASE = {
+  // this is the menu accessible via the single menu barcode value "MENU123"
+  "MENU123": [
+    { id: "PIZZA01", name: "Margherita Pizza", price: "₹299", img: "https://i.imgur.com/8z7XxJd.jpg" },
+    { id: "BURGER01", name: "Veg Burger", price: "₹149", img: "https://i.imgur.com/7kQEs5G.jpg" },
+    { id: "PANEER01", name: "Paneer Butter Masala", price: "₹229", img: "https://i.imgur.com/Xn0yqKw.jpg" },
+    // add more items here...
+  ]
+};
+
+/* -------------------------
+   Elements
+   ------------------------- */
+const video = document.getElementById('scannerVideo');
+const scanStatus = document.getElementById('scanStatus');
+const status = document.getElementById('status');
+const menuPanel = document.getElementById('menuPanel');
+const itemsList = document.getElementById('itemsList');
+const manualInput = document.getElementById('manualCode');
+const manualOpenBtn = document.getElementById('manualOpen');
+const restartScanBtn = document.getElementById('restartScan');
+
+const arContainer = document.getElementById('arContainer');
+const closeAR = document.getElementById('closeAR');
+const productTexture = document.getElementById('productTexture');
+const productPlane = document.getElementById('productPlane');
+
+let stream = null;
+let isScanning = false;
+let lastDetected = null;
+let activeMenuKey = null;
+
+/* -------------------------
+   Start video stream for scanning
+   ------------------------- */
+async function startScanner(){
+  stopScanner();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+    video.srcObject = stream;
+    isScanning = true;
+    scanStatus.textContent = 'Scanning for menu barcode...';
+    status.textContent = 'Point the camera at the printed menu barcode.';
+    // start detection loop
+    detectLoop();
+  } catch (e) {
+    console.error('Camera error', e);
+    scanStatus.textContent = 'Camera error: ' + (e.message || e);
+    status.textContent = 'Allow camera or test on HTTPS/localhost.';
+  }
+}
+
+function stopScanner(){
+  isScanning = false;
+  if(stream){
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+}
+
+/* -------------------------
+   Barcode detection
+   Uses BarcodeDetector if available; otherwise ZXing fallback.
+   ------------------------- */
+
+async function detectLoop(){
+  // prefer BarcodeDetector API
+  if('BarcodeDetector' in window){
+    // formats: include QR and usual barcodes
+    let formats = ['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39'];
+    let detector;
+    try {
+      detector = new BarcodeDetector({formats});
+    } catch(err){
+      console.warn('BarcodeDetector init err', err);
+      detector = null;
+    }
+    if(detector){
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      while(isScanning){
+        if(video.readyState < 2){ await new Promise(r=>setTimeout(r,200)); continue; }
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        try {
+          const results = await detector.detect(canvas);
+          if(results && results.length){
+            const code = results[0].rawValue;
+            handleDetectedCode(code);
+            break;
+          }
+        } catch(e) {
+          // if detect with imageData fails, fallback later
+          console.warn('BarcodeDetector detect error', e);
+        }
+        await new Promise(r=>setTimeout(r,300));
+      }
+      return;
+    }
+  }
+
+  // ZXing fallback: use camera frames and decode
+  const codeReader = new ZXing.BrowserMultiFormatReader();
+  try{
+    // ZXing can directly use the media stream; but to avoid conflicts we capture frames
+    await codeReader.decodeFromVideoDevice(null, video, (result, err) => {
+      if(result){
+        handleDetectedCode(result.getText());
+        codeReader.reset(); // stop
+      } else {
+        // optional: show err message while continuing
+      }
+    });
+  } catch(e){
+    console.warn('ZXing start error', e);
+    scanStatus.textContent = 'Scanner unavailable. Try manual code.';
+  }
+}
+
+/* -------------------------
+   When a barcode/menu-code is found
+   ------------------------- */
+function handleDetectedCode(code){
+  if(!code) return;
+  // avoid duplicates
+  if(lastDetected === code) return;
+  lastDetected = code;
+  // Normalize code (trim)
+  code = code.trim();
+  scanStatus.textContent = 'Detected: ' + code;
+  status.textContent = 'Detected menu code: ' + code;
+  // The "one barcode shows whole menu" behavior: if this code maps to menu DB, open that menu
+  if(MENU_DATABASE[code]){
+    openMenu(code);
+  } else {
+    // if unknown code, inform user and allow manual
+    status.textContent = `Scanned code "${code}" — no menu found. Use manual code or select item.`;
+    // optionally open menuPanel empty
+    menuPanel.style.display = 'none';
+  }
+  // stop camera scanning to free resource (user can restart later)
+  stopScanner();
+}
+
+/* -------------------------
+   Render menu items for a menu key
+   ------------------------- */
+function openMenu(menuKey){
+  activeMenuKey = menuKey;
+  const items = MENU_DATABASE[menuKey] || [];
+  itemsList.innerHTML = '';
+  for(const it of items){
+    const card = document.createElement('div');
+    card.className = 'itemCard';
+    card.innerHTML = `
+      <img src="${it.img}" alt="${it.name}" crossorigin="anonymous" />
+      <div style="margin-top:6px"><strong>${it.name}</strong></div>
+      <div style="font-size:13px;color:#444">${it.price}</div>
+      <div style="font-size:12px;color:#666;margin-top:6px">ID: ${it.id}</div>
+      <div style="margin-top:8px">
+        <button data-id="${it.id}" class="previewBtn">Show on plate</button>
+      </div>
+    `;
+    itemsList.appendChild(card);
+  }
+  menuPanel.style.display = 'block';
+  status.textContent = `Menu opened for ${menuKey}. Tap "Show on plate" for an item.`;
+  // attach click handlers
+  document.querySelectorAll('.previewBtn').forEach(b=>{
+    b.addEventListener('click', (ev)=>{
+      const id = ev.currentTarget.getAttribute('data-id');
+      const item = (MENU_DATABASE[activeMenuKey] || []).find(x=>x.id===id);
+      if(item) openARForItem(item);
+    });
+  });
+}
+
+/* -------------------------
+   Open AR view with chosen item mapped to plane texture
+   ------------------------- */
+function openARForItem(item){
+  if(!item || !item.img) { alert('Item image not found.'); return; }
+  // set image in a-assets
+  productTexture.setAttribute('src', item.img);
+  // tune plane size depending on image aspect ratio (optional)
+  // We'll pre-load image to get aspect ratio and adjust plane width/height
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    // set plane to have width ~0.9m and height adjusted by aspect ratio
+    const baseWidth = 0.9; // meters in AR scene
+    const aspect = img.width / img.height;
+    const w = baseWidth;
+    const h = baseWidth / aspect;
+    productPlane.setAttribute('width', w);
+    productPlane.setAttribute('height', h);
+    // show AR container
+    arContainer.style.display = 'block';
+    status.textContent = `AR opened: point camera at printed marker (hiro) under plate.`;
+    // AR.js will start camera; marker detection will show plane anchored to marker
+  };
+  img.onerror = () => {
+    alert('Failed to load product image. Make sure the image URL is HTTPS and allows cross-origin.');
+  };
+  img.src = item.img;
+}
+
+/* -------------------------
+   UI: manual open and restart
+   ------------------------- */
+manualOpenBtn.addEventListener('click', ()=>{
+  const v = manualInput.value.trim();
+  if(!v) { alert('Enter menu code (e.g. MENU123)'); return; }
+  if(MENU_DATABASE[v]) openMenu(v);
+  else alert('Menu code not found in database.');
+});
+
+restartScanBtn.addEventListener('click', ()=>{
+  lastDetected = null;
+  startScanner();
+});
+
+/* -------------------------
+   AR close: we reload page to stop A-Frame camera (simplest reliable cleanup)
+   ------------------------- */
+closeAR.addEventListener('click', ()=>{
+  // hide AR container and reload the page to free camera resources
+  arContainer.style.display = 'none';
+  // slight delay then reload
+  setTimeout(()=> location.reload(), 250);
+});
+
+/* -------------------------
+   Start scanning automatically if secure context
+   ------------------------- */
+(function init(){
+  if(location.protocol !== 'https:' && location.hostname !== 'localhost') {
+    scanStatus.textContent = 'Camera requires HTTPS or localhost. Use manual code or host on HTTPS.';
+    status.textContent = 'Serve this page over HTTPS (or open on localhost) to enable camera scanning.';
+  } else {
+    startScanner();
+  }
+})();
+</script>
+
+<footer>
+  Tips: Serve on HTTPS or localhost. Print a Hiro marker and place it beneath the plate.
+  To print marker: open https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/HIRO.png and print at A6 (~10x14 cm).
+</footer>
+</body>
+</html>
