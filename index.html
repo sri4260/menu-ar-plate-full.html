@@ -343,6 +343,21 @@ closeAR.addEventListener('click', ()=>{
     startScanner();
   }
 })();
+  // Auto-open menu if URL has ?menu=MENUKEY
+(function autoOpenMenuFromUrl(){
+  try {
+    const params = new URLSearchParams(location.search);
+    const menuKey = params.get('menu'); // e.g. ?menu=MENU123
+    if(menuKey && MENU_DATABASE && MENU_DATABASE[menuKey]) {
+      // stop scanner so camera resources free (optional)
+      lastDetected = menuKey;
+      stopScanner();
+      openMenu(menuKey);
+      console.log('Auto-opened menu:', menuKey);
+    }
+  } catch(e) { console.warn('autoOpenMenuFromUrl err', e); }
+})();
+
 </script>
 
 <footer>
@@ -351,3 +366,4 @@ closeAR.addEventListener('click', ()=>{
 </footer>
 </body>
 </html>
+
