@@ -270,25 +270,58 @@ function openMenu(menuKey){
    Open AR view with chosen item mapped to plane texture
    ------------------------- */
 function openARForItem(item){
-  if(!item || !item.img) { alert('Item image not found.'); return; }
-  productTexture.setAttribute('src', item.img);
+  const dbg = document.getElementById('status') || (function(){
+    const s = document.createElement('div'); s.id='status'; s.style.padding='10px'; s.style.background='#fff'; s.style.zIndex=9999; document.body.prepend(s); return s;
+  })();
+
+  if(!item || !item.img) {
+    dbg.textContent = 'ERROR: Item or image missing.';
+    return;
+  }
+
+  dbg.textContent = 'Loading image for AR: ' + item.img;
+
+  // preload image to detect errors / CORS
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
-    const baseWidth = 0.9;
-    const aspect = img.width / img.height;
-    const w = baseWidth;
-    const h = baseWidth / aspect;
-    productPlane.setAttribute('width', w);
-    productPlane.setAttribute('height', h);
-    arContainer.style.display = 'block';
-    status.textContent = `AR opened: point camera at printed marker (barcode value=1) under plate.`;
+    dbg.textContent = 'Image loaded OK. Opening AR...';
+    try {
+      // set a-frame asset
+      const productTexture = document.getElementById('productTexture');
+      productTexture.setAttribute('src', item.img);
+
+      // adjust plane by aspect ratio
+      const baseWidth = 0.9;
+      const aspect = img.width / img.height;
+      const w = baseWidth;
+      const h = baseWidth / aspect;
+      const productPlane = document.getElementById('productPlane');
+      productPlane.setAttribute('width', w);
+      productPlane.setAttribute('height', h);
+
+      // show AR container (A-Frame will start camera)
+      const arContainer = document.getElementById('arContainer');
+      arContainer.style.display = 'block';
+      dbg.textContent = 'AR shown — point camera to your printed marker.';
+
+    } catch(err){
+      dbg.textContent = 'ERROR while starting AR: ' + (err && err.message ? err.message : err);
+    }
   };
-  img.onerror = () => {
-    alert('Failed to load product image. Make sure the image URL is HTTPS and allows cross-origin.');
+
+  img.onerror = (e) => {
+    dbg.textContent = 'ERROR loading image. Possible causes: image blocked or not HTTPS/CORS. URL: ' + item.img;
   };
+
   img.src = item.img;
+
+  // capture any JS errors too
+  window.addEventListener('error', function(ev){
+    dbg.textContent = 'JS ERROR: ' + ev.message + ' at ' + ev.filename + ':' + ev.lineno;
+  });
 }
+
 
 /* -------------------------
    UI: manual open and restart
@@ -349,4 +382,5 @@ closeAR.addEventListener('click', ()=>{
 </footer>
 </body>
 </html>
+
 
