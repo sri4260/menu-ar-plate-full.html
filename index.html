@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>Menu Barcode → AR Plate (Full Setup)</title>
+<title>Menu Barcode → AR Plate (Updated)</title>
 
 <!-- A-Frame + AR.js (marker-based) -->
 <script src="https://unpkg.com/aframe@1.4.2/dist/aframe.min.js"></script>
@@ -68,9 +68,8 @@
       arjs="sourceType: webcam; debugUIEnabled: false;"
       style="width:100%; height:100vh; background: transparent;"
     >
-      <!-- marker (hiro preset). Put marker under or near plate -->
-      <a-marker type="barcode" value="10" id="marker">
-
+      <!-- marker: using your custom barcode marker value=1 -->
+      <a-marker type="barcode" value="1" id="marker">
         <!-- plane lies flat on plate; width/height adjusted in JS for size scaling -->
         <a-plane id="productPlane"
                  position="0 0 0"
@@ -85,7 +84,6 @@
       <a-entity camera></a-entity>
 
       <a-assets>
-        <!-- will set product image src here dynamically -->
         <img id="productTexture" src="" crossorigin="anonymous" />
       </a-assets>
     </a-scene>
@@ -97,13 +95,11 @@
    Replace or load from server (menu.json) in production.
    Each item: code (id), name, price, img (public HTTPS URL)
    ------------------------- */
-const MENU_DATABASE = {
-  // this is the menu accessible via the single menu barcode value "MENU123"
+window.MENU_DATABASE = {
   "MENU123": [
     { id: "PIZZA01", name: "Margherita Pizza", price: "₹299", img: "https://i.imgur.com/8z7XxJd.jpg" },
     { id: "BURGER01", name: "Veg Burger", price: "₹149", img: "https://i.imgur.com/7kQEs5G.jpg" },
-    { id: "PANEER01", name: "Paneer Butter Masala", price: "₹229", img: "https://i.imgur.com/Xn0yqKw.jpg" },
-    // add more items here...
+    { id: "PANEER01", name: "Paneer Butter Masala", price: "₹229", img: "https://i.imgur.com/Xn0yqKw.jpg" }
   ]
 };
 
@@ -205,7 +201,6 @@ async function detectLoop(){
   // ZXing fallback: use camera frames and decode
   const codeReader = new ZXing.BrowserMultiFormatReader();
   try{
-    // ZXing can directly use the media stream; but to avoid conflicts we capture frames
     await codeReader.decodeFromVideoDevice(null, video, (result, err) => {
       if(result){
         handleDetectedCode(result.getText());
@@ -225,23 +220,17 @@ async function detectLoop(){
    ------------------------- */
 function handleDetectedCode(code){
   if(!code) return;
-  // avoid duplicates
   if(lastDetected === code) return;
   lastDetected = code;
-  // Normalize code (trim)
   code = code.trim();
   scanStatus.textContent = 'Detected: ' + code;
   status.textContent = 'Detected menu code: ' + code;
-  // The "one barcode shows whole menu" behavior: if this code maps to menu DB, open that menu
-  if(MENU_DATABASE[code]){
+  if(window.MENU_DATABASE && window.MENU_DATABASE[code]){
     openMenu(code);
   } else {
-    // if unknown code, inform user and allow manual
-    status.textContent = `Scanned code "${code}" — no menu found. Use manual code or select item.`;
-    // optionally open menuPanel empty
+    status.textContent = `Scanned code "${code}" — no menu found. Use manual code.`;
     menuPanel.style.display = 'none';
   }
-  // stop camera scanning to free resource (user can restart later)
   stopScanner();
 }
 
@@ -250,7 +239,7 @@ function handleDetectedCode(code){
    ------------------------- */
 function openMenu(menuKey){
   activeMenuKey = menuKey;
-  const items = MENU_DATABASE[menuKey] || [];
+  const items = window.MENU_DATABASE[menuKey] || [];
   itemsList.innerHTML = '';
   for(const it of items){
     const card = document.createElement('div');
@@ -268,11 +257,10 @@ function openMenu(menuKey){
   }
   menuPanel.style.display = 'block';
   status.textContent = `Menu opened for ${menuKey}. Tap "Show on plate" for an item.`;
-  // attach click handlers
   document.querySelectorAll('.previewBtn').forEach(b=>{
     b.addEventListener('click', (ev)=>{
       const id = ev.currentTarget.getAttribute('data-id');
-      const item = (MENU_DATABASE[activeMenuKey] || []).find(x=>x.id===id);
+      const item = (window.MENU_DATABASE[activeMenuKey] || []).find(x=>x.id===id);
       if(item) openARForItem(item);
     });
   });
@@ -283,24 +271,18 @@ function openMenu(menuKey){
    ------------------------- */
 function openARForItem(item){
   if(!item || !item.img) { alert('Item image not found.'); return; }
-  // set image in a-assets
   productTexture.setAttribute('src', item.img);
-  // tune plane size depending on image aspect ratio (optional)
-  // We'll pre-load image to get aspect ratio and adjust plane width/height
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
-    // set plane to have width ~0.9m and height adjusted by aspect ratio
-    const baseWidth = 0.9; // meters in AR scene
+    const baseWidth = 0.9;
     const aspect = img.width / img.height;
     const w = baseWidth;
     const h = baseWidth / aspect;
     productPlane.setAttribute('width', w);
     productPlane.setAttribute('height', h);
-    // show AR container
     arContainer.style.display = 'block';
-    status.textContent = `AR opened: point camera at printed marker (hiro) under plate.`;
-    // AR.js will start camera; marker detection will show plane anchored to marker
+    status.textContent = `AR opened: point camera at printed marker (barcode value=1) under plate.`;
   };
   img.onerror = () => {
     alert('Failed to load product image. Make sure the image URL is HTTPS and allows cross-origin.');
@@ -314,7 +296,7 @@ function openARForItem(item){
 manualOpenBtn.addEventListener('click', ()=>{
   const v = manualInput.value.trim();
   if(!v) { alert('Enter menu code (e.g. MENU123)'); return; }
-  if(MENU_DATABASE[v]) openMenu(v);
+  if(window.MENU_DATABASE[v]) openMenu(v);
   else alert('Menu code not found in database.');
 });
 
@@ -324,14 +306,29 @@ restartScanBtn.addEventListener('click', ()=>{
 });
 
 /* -------------------------
-   AR close: we reload page to stop A-Frame camera (simplest reliable cleanup)
+   AR close: reload page to stop A-Frame camera
    ------------------------- */
 closeAR.addEventListener('click', ()=>{
-  // hide AR container and reload the page to free camera resources
   arContainer.style.display = 'none';
-  // slight delay then reload
   setTimeout(()=> location.reload(), 250);
 });
+
+/* -------------------------
+   Auto-open menu from URL param ?menu=MENUKEY
+   ------------------------- */
+(function autoOpenMenuFromUrl(){
+  try {
+    const params = new URLSearchParams(location.search);
+    const menuKey = params.get('menu'); // e.g. ?menu=MENU123
+    if(menuKey && window.MENU_DATABASE && window.MENU_DATABASE[menuKey]) {
+      // stop scanner if running, then open the menu
+      if(typeof lastDetected !== 'undefined') lastDetected = menuKey;
+      try { stopScanner(); } catch(e) {}
+      openMenu(menuKey);
+      console.log('Auto-opened menu:', menuKey);
+    }
+  } catch(e) { console.warn('autoOpenMenuFromUrl err', e); }
+})();
 
 /* -------------------------
    Start scanning automatically if secure context
@@ -344,28 +341,11 @@ closeAR.addEventListener('click', ()=>{
     startScanner();
   }
 })();
-  // Auto-open menu if URL has ?menu=MENUKEY
-(function autoOpenMenuFromUrl(){
-  try {
-    const params = new URLSearchParams(location.search);
-    const menuKey = params.get('menu'); // e.g. ?menu=MENU123
-    if(menuKey && MENU_DATABASE && MENU_DATABASE[menuKey]) {
-      // stop scanner so camera resources free (optional)
-      lastDetected = menuKey;
-      stopScanner();
-      openMenu(menuKey);
-      console.log('Auto-opened menu:', menuKey);
-    }
-  } catch(e) { console.warn('autoOpenMenuFromUrl err', e); }
-})();
-
 </script>
 
 <footer>
-  Tips: Serve on HTTPS or localhost. Print a Hiro marker and place it beneath the plate.
-  To print marker: open https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/HIRO.png and print at A6 (~10x14 cm).
+  Tips: Serve on HTTPS or localhost. Print a barcode marker and place it beneath the plate.
+  To generate barcode markers (for AR.js): use a marker generator and pick "barcode" / value 1.
 </footer>
 </body>
 </html>
-
-
